@@ -33,12 +33,177 @@ body,
 
 .chat-header {
   flex: 0 0 auto;
-  padding: 0.9rem 1rem;
-  font-weight: 700;
-  font-size: 1.1rem;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
   border-bottom: 1px solid rgba(0, 0, 0, 0.1);
   background: #ffffff;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.mode-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.mode-tab {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.mode-tab.active {
+  background: #396cd8;
+  color: #fff;
+  border-color: #396cd8;
+}
+
+.workspace-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
+  font-size: 0.85rem;
+}
+
+.ws-btn {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 7px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ws-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.ws-hint {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.file-list {
+  flex: 0 0 auto;
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
+}
+
+.file-item {
+  text-align: left;
+  padding: 0.15rem 0.3rem;
+  border: none;
+  background: transparent;
+  color: #396cd8;
+  cursor: pointer;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.file-item:hover {
+  text-decoration: underline;
+}
+
+.actions {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed rgba(128, 128, 128, 0.4);
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.action-line {
+  font-family: "Cascadia Code", Consolas, monospace;
+  line-height: 1.6;
+}
+
+.proposals {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.proposal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: rgba(57, 108, 216, 0.06);
+}
+
+.proposal-path {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apply-btn {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  background: #2e9e5b;
+  color: #fff;
+  cursor: pointer;
+}
+
+.apply-btn:disabled {
+  background: #9bb7a7;
+  cursor: default;
+}
+
+.status-banner {
+  flex: 0 0 auto;
+  padding: 0.5rem 1rem;
+  text-align: center;
+  font-size: 0.9rem;
+  background: #fff6d6;
+  color: #7a5d00;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-banner {
+    background: #3a3320;
+    color: #e8d48a;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
 }
 
 .chat-messages {
@@ -156,5 +321,31 @@ body,
     background: #1b1b1b;
     color: #f6f6f6;
     border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .workspace-bar,
+  .file-list {
+    background: #1f1f1f;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .ws-btn,
+  .mode-tab {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .mode-tab.active {
+    background: #396cd8;
+    border-color: #396cd8;
+  }
+
+  .file-item {
+    color: #6db3ff;
+  }
+
+  .proposal {
+    background: rgba(57, 108, 216, 0.15);
+    border-color: rgba(255, 255, 255, 0.12);
   }
 }
