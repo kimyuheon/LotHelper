@@ -68,6 +68,8 @@ function App() {
   const [ready, setReady] = useState(false);
   const [modelChoice, setModelChoice] = useState<string[] | null>(null);
   const [noModel, setNoModel] = useState(false);
+  const [ngl, setNgl] = useState<number>(99);
+  const [restarting, setRestarting] = useState(false);
   const [mode, setMode] = useState<Mode>("chat");
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [files, setFiles] = useState<string[]>([]);
@@ -94,6 +96,7 @@ function App() {
     }
     poll();
     invoke<string | null>("current_workspace").then((w) => w && setWorkspace(w));
+    invoke<number>("get_ngl").then(setNgl).catch(() => {});
     invoke<LlamaStatus>("llama_status")
       .then((s) => {
         if (s.state === "choose") setModelChoice(s.models);
@@ -104,6 +107,28 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  async function applyNgl() {
+    setRestarting(true);
+    setReady(false);
+    setModelChoice(null);
+    try {
+      await invoke("set_ngl", { value: ngl });
+      await invoke("restart_llama");
+    } catch (err) {
+      addMessage({ role: "assistant", content: `서버 재시작 실패: ${String(err)}` });
+      setRestarting(false);
+      return;
+    }
+    for (let i = 0; i < 200; i++) {
+      if (await invoke<boolean>("llama_ready").catch(() => false)) {
+        setReady(true);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    setRestarting(false);
+  }
 
   async function pickModel(name: string) {
     setModelChoice(null);
@@ -226,6 +251,23 @@ function App() {
           ))}
         </div>
       </header>
+
+      <div className="settings-bar">
+        <span className="settings-label">GPU 층 (-ngl):</span>
+        <input
+          className="ngl-input"
+          type="number"
+          min={0}
+          max={999}
+          value={ngl}
+          onChange={(e) => setNgl(Number(e.currentTarget.value))}
+          title="GPU에 올릴 레이어 수. VRAM이 부족한 큰 모델은 낮추세요 (예: 32). 99=전부."
+        />
+        <button className="ws-btn" onClick={applyNgl} disabled={restarting}>
+          {restarting ? "재시작 중…" : "적용 (서버 재시작)"}
+        </button>
+        <span className="settings-hint">큰 모델(14B+)은 VRAM에 맞게 낮추세요</span>
+      </div>
 
       {mode !== "chat" && (
         <div className="workspace-bar">

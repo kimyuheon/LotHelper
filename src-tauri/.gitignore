@@ -13,3 +13,6 @@
 # Model weights (large, OS-independent) — keep only the README
 /models/*
 !/models/README.md
+
+# Local runtime setting (GPU layers)
+/ngl.txt

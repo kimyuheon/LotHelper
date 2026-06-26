@@ -80,6 +80,36 @@ body,
   font-size: 0.85rem;
 }
 
+.settings-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
+  font-size: 0.82rem;
+}
+
+.settings-label {
+  font-weight: 600;
+}
+
+.ngl-input {
+  width: 4rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.82rem;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+}
+
+.settings-hint {
+  opacity: 0.55;
+  font-style: italic;
+}
+
 .ws-btn {
   flex: 0 0 auto;
   padding: 0.25rem 0.6rem;
@@ -357,9 +387,16 @@ body,
   }
 
   .workspace-bar,
+  .settings-bar,
   .file-list {
     background: #1f1f1f;
     border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .ngl-input {
+    background: #1b1b1b;
+    color: #f6f6f6;
+    border-color: rgba(255, 255, 255, 0.2);
   }
 
   .ws-btn,

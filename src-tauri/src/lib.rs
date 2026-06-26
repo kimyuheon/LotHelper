@@ -65,6 +65,12 @@ struct Workspace(Mutex<Option<PathBuf>>);
 /// Base directory containing `llama/` and `models/` (resolved at startup).
 struct AppBase(PathBuf);
 
+/// GPU layer count (`-ngl`) for llama-server. Persisted to `<base>/ngl.txt`.
+struct NglSetting(Mutex<i32>);
+
+/// Name of the model we last started, so we can restart it (e.g. after -ngl change).
+struct LastModel(Mutex<Option<String>>);
+
 #[derive(Serialize)]
 struct LlamaStatus {
     /// "starting" (running or loading) | "choose" (pick a model) | "no_model".
@@ -153,7 +159,19 @@ fn server_running() -> bool {
     }
 }
 
-fn spawn_llama(base: &Path, model: &Path) -> std::io::Result<Child> {
+/// GPU layer count, persisted to `<base>/ngl.txt` (default 99 = offload all).
+fn load_ngl(base: &Path) -> i32 {
+    std::fs::read_to_string(base.join("ngl.txt"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(99)
+}
+
+fn save_ngl(base: &Path, ngl: i32) {
+    let _ = std::fs::write(base.join("ngl.txt"), ngl.to_string());
+}
+
+fn spawn_llama(base: &Path, model: &Path, ngl: i32) -> std::io::Result<Child> {
     let bin = llama_binary(base);
     if !bin.exists() {
         return Err(std::io::Error::new(
@@ -171,7 +189,7 @@ fn spawn_llama(base: &Path, model: &Path) -> std::io::Result<Child> {
         "--port",
         &LLAMA_PORT.to_string(),
         "-ngl",
-        "99",
+        &ngl.to_string(),
         "-c",
         "8192",
         // Required so the server parses the model's function calls into the
@@ -361,6 +379,8 @@ fn start_model(
     name: String,
     base: tauri::State<'_, AppBase>,
     llama: tauri::State<'_, LlamaServer>,
+    ngl: tauri::State<'_, NglSetting>,
+    last: tauri::State<'_, LastModel>,
 ) -> Result<(), String> {
     if server_running() || llama.0.lock().unwrap().is_some() {
         return Ok(());
@@ -369,8 +389,63 @@ fn start_model(
     if !model.exists() {
         return Err(format!("모델을 찾을 수 없습니다: {name}"));
     }
-    let child = spawn_llama(&base.0, &model).map_err(|e| e.to_string())?;
+    let n = *ngl.0.lock().unwrap();
+    let child = spawn_llama(&base.0, &model, n).map_err(|e| e.to_string())?;
     *llama.0.lock().unwrap() = Some(child);
+    *last.0.lock().unwrap() = Some(name);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_ngl(ngl: tauri::State<'_, NglSetting>) -> i32 {
+    *ngl.0.lock().unwrap()
+}
+
+/// Update the -ngl setting and persist it (applies on the next server start).
+#[tauri::command]
+fn set_ngl(value: i32, base: tauri::State<'_, AppBase>, ngl: tauri::State<'_, NglSetting>) {
+    let v = value.clamp(0, 999);
+    *ngl.0.lock().unwrap() = v;
+    save_ngl(&base.0, v);
+}
+
+/// Kill the app-started llama-server (if any) and restart the last model with
+/// the current -ngl. Used to apply a new -ngl to a running server.
+#[tauri::command]
+fn restart_llama(
+    base: tauri::State<'_, AppBase>,
+    llama: tauri::State<'_, LlamaServer>,
+    ngl: tauri::State<'_, NglSetting>,
+    last: tauri::State<'_, LastModel>,
+) -> Result<(), String> {
+    // Pick the model to (re)start: the last one we started, else the single model.
+    let name = last.0.lock().unwrap().clone().or_else(|| {
+        let models = find_models(&base.0);
+        if models.len() == 1 {
+            models[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    });
+    let Some(name) = name else {
+        return Err("재시작할 모델을 알 수 없습니다. 모델을 먼저 선택하세요.".to_string());
+    };
+
+    // Stop the server we started (can't restart a manually-run one).
+    if let Some(mut child) = llama.0.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    } else if server_running() {
+        return Err("외부에서 실행한 서버는 앱이 재시작할 수 없습니다. 수동으로 다시 띄워주세요.".to_string());
+    }
+
+    let model = base.0.join("models").join(&name);
+    let n = *ngl.0.lock().unwrap();
+    let child = spawn_llama(&base.0, &model, n).map_err(|e| e.to_string())?;
+    *llama.0.lock().unwrap() = Some(child);
+    *last.0.lock().unwrap() = Some(name);
     Ok(())
 }
 
@@ -826,6 +901,8 @@ pub fn run() {
         .manage(Workspace(Mutex::new(None)))
         .setup(|app| {
             let base = resource_base(app);
+            let ngl = load_ngl(&base);
+            let mut last_model: Option<String> = None;
             let child = if server_running() {
                 println!("llama-server가 이미 {LLAMA_PORT} 포트에서 실행 중 — 재사용합니다.");
                 None
@@ -833,9 +910,11 @@ pub fn run() {
                 let models = find_models(&base);
                 match models.len() {
                     // Exactly one model → start it automatically.
-                    1 => match spawn_llama(&base, &models[0]) {
+                    1 => match spawn_llama(&base, &models[0], ngl) {
                         Ok(c) => {
                             println!("llama-server 시작됨 (pid {})", c.id());
+                            last_model =
+                                models[0].file_name().map(|n| n.to_string_lossy().to_string());
                             Some(c)
                         }
                         Err(e) => {
@@ -856,6 +935,8 @@ pub fn run() {
             };
             app.manage(AppBase(base));
             app.manage(LlamaServer(Mutex::new(child)));
+            app.manage(NglSetting(Mutex::new(ngl)));
+            app.manage(LastModel(Mutex::new(last_model)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -865,6 +946,9 @@ pub fn run() {
             llama_ready,
             llama_status,
             start_model,
+            get_ngl,
+            set_ngl,
+            restart_llama,
             select_workspace,
             current_workspace,
             workspace_files,
