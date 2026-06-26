@@ -6,10 +6,9 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
-# llama-server binaries and shared libraries (large, per-OS) — keep only the READMEs
-/llama/**/*
-!/llama/**/
-!/llama/**/README.md
+# llama-server binary + shared libraries (large) — keep only the README
+/llama/*
+!/llama/README.md
 
 # Model weights (large, OS-independent) — keep only the README
 /models/*

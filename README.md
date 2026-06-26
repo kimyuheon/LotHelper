@@ -95,7 +95,8 @@ npm run tauri build
 
 | 항목 | 위치 |
 | --- | --- |
-| llama-server 주소/포트 | `src-tauri/src/lib.rs` 의 `LLAMA_URL` 상수 |
+| llama-server 호스트/포트 | `src-tauri/src/lib.rs` 의 `LLAMA_HOST` / `LLAMA_PORT` 상수 |
+| llama-server 바이너리 | `src-tauri/llama/` 에 OS용 `llama-server(.exe)` 배치 (앱이 자동 실행) |
 | 시스템 프롬프트 | `src-tauri/src/lib.rs` 의 `chat()` 안 system 메시지 |
 | 온도(temperature) 등 | `src-tauri/src/lib.rs` 의 `ChatRequest` |
 | 채팅 UI | `src/App.tsx`, `src/App.css` |

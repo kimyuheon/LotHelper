@@ -25,6 +25,11 @@ interface AgentResult {
   changed: string[];
 }
 
+interface LlamaStatus {
+  state: string; // "starting" | "choose" | "no_model"
+  models: string[];
+}
+
 const MODE_LABELS: Record<Mode, string> = {
   chat: "채팅",
   propose: "제안→승인",
@@ -61,6 +66,8 @@ function App() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [ready, setReady] = useState(false);
+  const [modelChoice, setModelChoice] = useState<string[] | null>(null);
+  const [noModel, setNoModel] = useState(false);
   const [mode, setMode] = useState<Mode>("chat");
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [files, setFiles] = useState<string[]>([]);
@@ -87,10 +94,25 @@ function App() {
     }
     poll();
     invoke<string | null>("current_workspace").then((w) => w && setWorkspace(w));
+    invoke<LlamaStatus>("llama_status")
+      .then((s) => {
+        if (s.state === "choose") setModelChoice(s.models);
+        else if (s.state === "no_model") setNoModel(true);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+
+  async function pickModel(name: string) {
+    setModelChoice(null);
+    try {
+      await invoke("start_model", { name });
+    } catch (err) {
+      addMessage({ role: "assistant", content: `모델 시작 실패: ${String(err)}` });
+    }
+  }
 
   async function refreshFiles() {
     try {
@@ -239,9 +261,22 @@ function App() {
         </div>
       )}
 
-      {!ready && (
-        <div className="status-banner">⏳ 모델을 불러오는 중입니다… (llama-server 준비 대기)</div>
-      )}
+      {!ready && modelChoice && modelChoice.length > 0 ? (
+        <div className="model-picker">
+          <div className="model-picker-title">실행할 모델을 선택하세요</div>
+          {modelChoice.map((m) => (
+            <button key={m} className="model-option" onClick={() => pickModel(m)}>
+              {m}
+            </button>
+          ))}
+        </div>
+      ) : !ready ? (
+        <div className="status-banner">
+          {noModel
+            ? "⚠️ models/ 폴더에 .gguf 모델이 없습니다. 모델을 넣거나 llama-server를 수동 실행하세요."
+            : "⏳ 모델을 불러오는 중입니다… (llama-server 준비 대기)"}
+        </div>
+      ) : null}
 
       <div className="chat-messages">
         {messages.map((m) => (

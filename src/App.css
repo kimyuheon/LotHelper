@@ -198,6 +198,39 @@ body,
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
+.model-picker {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.8rem 1rem;
+  background: #fff6d6;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.model-picker-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #7a5d00;
+}
+
+.model-option {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.model-option:hover {
+  border-color: #396cd8;
+  background: rgba(57, 108, 216, 0.06);
+}
+
 @media (prefers-color-scheme: dark) {
   .status-banner {
     background: #3a3320;
@@ -347,5 +380,18 @@ body,
   .proposal {
     background: rgba(57, 108, 216, 0.15);
     border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .model-picker {
+    background: #3a3320;
+  }
+
+  .model-picker-title {
+    color: #e8d48a;
+  }
+
+  .model-option {
+    background: #2a2a2a;
+    border-color: rgba(255, 255, 255, 0.15);
   }
 }
