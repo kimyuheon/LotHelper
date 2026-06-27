@@ -745,11 +745,11 @@ async fn agent_chat(
 
     let mut actions: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
-    let mut last_runs: Vec<String> = Vec::new();
     let mut last_run_sig = String::new();
     let mut nudged = false;
+    let mut identical_fails = 0;
 
-    for _ in 0..12 {
+    for _ in 0..25 {
         let body = json!({
             "messages": convo,
             "temperature": 0.3,
@@ -798,21 +798,6 @@ async fn agent_chat(
             return Ok(AgentResult { reply: content, actions, changed });
         }
 
-        // Stuck: repeating the same command(s) without writing/changing any file.
-        if file_blocks.is_empty() && !runs.is_empty() && runs == last_runs {
-            changed.sort();
-            changed.dedup();
-            return Ok(AgentResult {
-                reply: "같은 명령을 반복하기만 해서 중단했습니다. 모델이 빌드 오류를 스스로 \
-                        고치지 못하는 것 같습니다. '먼저 main.cpp에 ~코드를 써줘'처럼 \
-                        파일 작성을 명시해 더 작게 나눠 지시해 주세요."
-                    .to_string(),
-                actions,
-                changed,
-            });
-        }
-        last_runs = runs.clone();
-
         let mut feedback = String::new();
 
         for (path, contents) in &file_blocks {
@@ -850,24 +835,38 @@ async fn agent_chat(
             feedback.push_str(&format!("$ {cmd}\n{out}\n"));
         }
 
-        // Stuck: a command keeps failing with the exact same output as last round
-        // (the model's edits aren't changing the result) → stop and show the error.
+        // Track repeated identical failures (the model's edits aren't changing
+        // the result). Don't give up immediately — push it to try a DIFFERENT
+        // approach, and only stop after several identical rounds in a row.
         if any_fail && !run_sig.is_empty() && run_sig == last_run_sig {
+            identical_fails += 1;
+        } else {
+            identical_fails = 0;
+        }
+        last_run_sig = run_sig;
+
+        if identical_fails >= 3 {
             changed.sort();
             changed.dedup();
             return Ok(AgentResult {
                 reply: format!(
-                    "빌드가 같은 오류로 계속 실패해서 중단했습니다. 모델이 이 오류를 \
-                     스스로 못 고치는 것 같습니다.\n\n```\n{last_output}\n```\n\n\
-                     오류를 직접 보고 고치거나, 더 작게 나눠 지시해 주세요."
+                    "다른 방법을 시도했는데도 같은 오류가 계속 나서 중단했습니다.\n\n\
+                     ```\n{last_output}\n```\n\n오류를 직접 보고 고치거나, 더 작게 나눠 \
+                     지시해 주세요."
                 ),
                 actions,
                 changed,
             });
         }
-        last_run_sig = run_sig;
 
-        if any_fail {
+        if any_fail && identical_fails >= 1 {
+            // Same error as before → tell it to change strategy, don't repeat.
+            feedback.push_str(
+                "\n[중요] 방금과 똑같은 오류입니다. 같은 방법은 통하지 않습니다. \
+                 완전히 다른 접근을 시도하세요 — 다른 컴파일 옵션/라이브러리, 다른 \
+                 코드 구조나 함수, 또는 문제를 더 작게 쪼개기. 같은 명령·코드를 반복하지 마세요.",
+            );
+        } else if any_fail {
             feedback.push_str(
                 "\nA command FAILED. If a needed source file does not exist yet, output its \
                  FULL content in a ```file:<path> block FIRST, then build again. If there are \
