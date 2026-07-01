@@ -27,7 +27,20 @@ const AGENT_SYSTEM: &str = "You are CppAI, an autonomous coding agent working in
     string is `file:<relative/path>` — e.g. ```file:src/main.cpp ... ```\n\
     - To RUN a shell command (build/compile/test/run), output a ```run block with one \
     shell command per line.\n\
-    Use workspace-relative paths only (never absolute, never '..'). After you emit \
+    - To READ a file's full content, output ```read:<relative/path> (empty body). \
+    The runtime returns the file so you can see code that the snapshot truncated.\n\
+    - To SEARCH the project for text, output ```search:<text> (empty body). \
+    The runtime returns matching `path:line: text` results.\n\
+    - To DELETE a file or folder, output ```delete:<relative/path> (empty body).\n\
+    Use workspace-relative paths only (never absolute, never '..'). A list of the \
+    project's files and a snapshot of small files are provided to you each turn; use \
+    read/search to inspect anything not fully shown BEFORE editing it.\n\
+    PATHS — be consistent: REUSE the exact paths shown in the project file list. If a \
+    file already exists (e.g. main.cpp), edit THAT path — never create a duplicate in a \
+    different folder (do NOT make src/main.cpp when main.cpp exists). Do NOT invent \
+    subfolders for a simple program — keep its files together in the workspace root. \
+    Files that reference each other (a .cpp, its .rc resource script, and resource.h) \
+    MUST be in the SAME folder. After you emit \
     blocks, the runtime applies the files, runs the commands, and sends you their output. \
     Read the output: if a build fails, FIX the files and run again. Repeat until it builds \
     and runs cleanly. Keep prose short.\n\
@@ -50,7 +63,10 @@ const AGENT_SYSTEM: &str = "You are CppAI, an autonomous coding agent working in
     libraries explicitly, e.g. `cl /EHsc main.cpp user32.lib gdi32.lib` — a bare \
     `cl /EHsc main.cpp` fails to link WinAPI functions like MessageBox. For non-ASCII \
     text (e.g. Korean) in C/C++ source, add the `/utf-8` flag and use wide strings \
-    (L\"...\", MessageBoxW).";
+    (L\"...\", MessageBoxW). A Win32 .rc resource script must be compiled with `rc` \
+    FIRST (`rc main.rc` produces main.res), then linked: `cl /EHsc main.cpp main.res \
+    user32.lib` — `cl main.cpp main.rc` does NOT work. For a simple dialog/message, \
+    prefer a single file using MessageBoxW with NO .rc and NO resource.h.";
 
 fn chat_url() -> String {
     format!("http://{LLAMA_HOST}:{LLAMA_PORT}/v1/chat/completions")
@@ -639,11 +655,34 @@ fn run_shell(root: &Path, command: &str, timeout: Duration) -> String {
     }
 }
 
-/// Parse the model's reply into file blocks (```file:PATH ... ```) and run
-/// blocks (```run / ```sh / ```bash / ```cmd / ```powershell ...).
-fn parse_blocks(text: &str) -> (Vec<(String, String)>, Vec<String>) {
-    let mut files = Vec::new();
-    let mut runs = Vec::new();
+/// Actions the model requested via fenced blocks.
+#[derive(Default)]
+struct Blocks {
+    /// `file:PATH` blocks — (path, full content) to write.
+    files: Vec<(String, String)>,
+    /// `run`/`sh`/`bash`/... blocks — shell commands to execute.
+    runs: Vec<String>,
+    /// `read:PATH` blocks — files whose full content to return to the model.
+    reads: Vec<String>,
+    /// `search:TEXT` blocks — project searches to run and return matches for.
+    searches: Vec<String>,
+    /// `delete:PATH` blocks — files or folders to remove.
+    deletes: Vec<String>,
+}
+
+impl Blocks {
+    fn is_empty(&self) -> bool {
+        self.files.is_empty()
+            && self.runs.is_empty()
+            && self.reads.is_empty()
+            && self.searches.is_empty()
+            && self.deletes.is_empty()
+    }
+}
+
+/// Parse the model's reply into the action blocks it emitted.
+fn parse_blocks(text: &str) -> Blocks {
+    let mut b = Blocks::default();
     let mut lines = text.lines();
 
     while let Some(line) = lines.next() {
@@ -665,25 +704,92 @@ fn parse_blocks(text: &str) -> (Vec<(String, String)>, Vec<String>) {
             body.pop();
         }
 
+        let lower = info.to_lowercase();
         if let Some(path) = info
             .strip_prefix("file:")
             .or_else(|| info.strip_prefix("File:"))
         {
-            files.push((path.trim().to_string(), body));
+            b.files.push((path.trim().to_string(), body));
+        } else if let Some(path) = info
+            .strip_prefix("read:")
+            .or_else(|| info.strip_prefix("Read:"))
+        {
+            b.reads.push(path.trim().to_string());
+        } else if let Some(q) = info
+            .strip_prefix("search:")
+            .or_else(|| info.strip_prefix("Search:"))
+            .or_else(|| info.strip_prefix("grep:"))
+        {
+            b.searches.push(q.trim().to_string());
+        } else if let Some(path) = info
+            .strip_prefix("delete:")
+            .or_else(|| info.strip_prefix("Delete:"))
+            .or_else(|| info.strip_prefix("remove:"))
+            .or_else(|| info.strip_prefix("rm:"))
+        {
+            b.deletes.push(path.trim().to_string());
         } else if matches!(
-            info.to_lowercase().as_str(),
+            lower.as_str(),
             "run" | "sh" | "bash" | "cmd" | "shell" | "console" | "powershell" | "ps" | "bat"
         ) {
             for cmd in body.lines() {
                 let cmd = cmd.trim();
                 if !cmd.is_empty() {
-                    runs.push(cmd.to_string());
+                    b.runs.push(cmd.to_string());
                 }
             }
         }
     }
 
-    (files, runs)
+    b
+}
+
+/// A flat, sorted list of the workspace's files (for project structure).
+fn workspace_tree(root: &Path) -> String {
+    let mut files = Vec::new();
+    walk(root, root, &mut files);
+    files.sort();
+    files.truncate(400);
+    files.join("\n")
+}
+
+/// Search workspace text files for `pattern` (case-insensitive), returning
+/// `path:line: text` matches, capped to keep the context small.
+fn search_workspace(root: &Path, pattern: &str) -> String {
+    if pattern.is_empty() {
+        return "(빈 검색어)".to_string();
+    }
+    let needle = pattern.to_lowercase();
+    let mut files = Vec::new();
+    walk(root, root, &mut files);
+    files.sort();
+
+    let mut out = String::new();
+    let mut hits = 0;
+    for rel in &files {
+        if hits >= 60 {
+            out.push_str("...(검색 결과 더 있음)...\n");
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(root.join(rel)) else {
+            continue;
+        };
+        for (i, line) in content.lines().enumerate() {
+            if line.to_lowercase().contains(&needle) {
+                let snippet = truncate_str(line.trim(), 200);
+                out.push_str(&format!("{rel}:{}: {snippet}\n", i + 1));
+                hits += 1;
+                if hits >= 60 {
+                    break;
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        format!("'{pattern}' 검색 결과 없음")
+    } else {
+        out
+    }
 }
 
 fn truncate_str(s: &str, max: usize) -> &str {
@@ -729,13 +835,22 @@ async fn agent_chat(
     let client = reqwest::Client::new();
 
     let mut convo: Vec<Value> = vec![json!({ "role": "system", "content": AGENT_SYSTEM })];
+
+    let tree = workspace_tree(&root);
+    if !tree.trim().is_empty() {
+        convo.push(json!({
+            "role": "system",
+            "content": format!("Project files (workspace-relative paths):\n{tree}"),
+        }));
+    }
     let snapshot = workspace_snapshot(&root);
     if !snapshot.trim().is_empty() {
         convo.push(json!({
             "role": "system",
             "content": format!(
-                "Current files in the workspace. To edit one, re-emit a ```file:<path> block \
-                 with its FULL new content:\n\n{snapshot}"
+                "Snapshot of small files (larger ones are truncated — use ```read:<path> \
+                 for full content). To edit a file, re-emit a ```file:<path> block with its \
+                 FULL new content:\n\n{snapshot}"
             ),
         }));
     }
@@ -746,13 +861,14 @@ async fn agent_chat(
     let mut actions: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
     let mut last_run_sig = String::new();
-    let mut nudged = false;
+    let mut retries = 0;
+    let mut temperature = 0.3f32;
     let mut identical_fails = 0;
 
     for _ in 0..25 {
         let body = json!({
             "messages": convo,
-            "temperature": 0.3,
+            "temperature": temperature,
             "stream": false,
         });
 
@@ -777,19 +893,35 @@ async fn agent_chat(
             .to_string();
         convo.push(json!({ "role": "assistant", "content": content.clone() }));
 
-        let (file_blocks, runs) = parse_blocks(&content);
+        let blocks = parse_blocks(&content);
 
-        // No blocks emitted. If nothing has been done yet, the model is likely
-        // replying conversationally instead of acting — nudge it once. Otherwise
-        // treat this as the final answer.
-        if file_blocks.is_empty() && runs.is_empty() {
-            if actions.is_empty() && !nudged {
-                nudged = true;
+        // No blocks emitted. The model is either done, or it replied
+        // conversationally / gave up ("can't", "안 됩니다"). If it hasn't acted
+        // yet or is refusing, push back hard and retry (with more randomness) a
+        // few times instead of accepting the give-up. Otherwise it's the final answer.
+        if blocks.is_empty() {
+            let gave_up = {
+                let low = content.to_lowercase();
+                ["cannot", "can't", "unable", "impossible", "not possible", "i'm sorry", "i am sorry"]
+                    .iter()
+                    .any(|m| low.contains(m))
+                    || [
+                        "안 됩니다", "안됩니다", "할 수 없", "불가능", "죄송", "못 하", "못합니다",
+                        "안돼", "안 돼", "어렵습니다",
+                    ]
+                    .iter()
+                    .any(|m| content.contains(m))
+            };
+
+            if retries < 3 && (actions.is_empty() || gave_up) {
+                retries += 1;
+                temperature = 0.8; // add variation so the retry isn't identical
                 convo.push(json!({
                     "role": "user",
-                    "content": "당신은 ```file: 또는 ```run 블록을 출력하지 않아 아무 작업도 \
-                        실행되지 않았습니다. 텍스트만으로는 아무 일도 일어나지 않습니다. \
-                        요청을 수행하려면 지금 해당 블록을 출력하세요."
+                    "content": "포기하지 마세요. '안 된다/불가능/죄송' 같은 말 대신, 지금 바로 \
+                        ```file: 또는 ```run 블록으로 실제로 시도하세요. 한 방법이 막히면 \
+                        완전히 다른 접근을 쓰고, 문제를 더 작게 쪼개서라도 진행하세요. \
+                        텍스트만으로는 아무 일도 일어나지 않습니다."
                 }));
                 continue;
             }
@@ -800,7 +932,43 @@ async fn agent_chat(
 
         let mut feedback = String::new();
 
-        for (path, contents) in &file_blocks {
+        // Deletions: remove files or folders (workspace-confined).
+        for path in &blocks.deletes {
+            match resolve(&root, path) {
+                Ok(full) => {
+                    let res = if full.is_dir() {
+                        std::fs::remove_dir_all(&full)
+                    } else {
+                        std::fs::remove_file(&full)
+                    };
+                    match res {
+                        Ok(()) => {
+                            actions.push(format!("🗑️ 삭제: {path}"));
+                            changed.push(path.clone());
+                            feedback.push_str(&format!("deleted {path}\n"));
+                        }
+                        Err(e) => feedback.push_str(&format!("delete {path} ERROR: {e}\n")),
+                    }
+                }
+                Err(e) => feedback.push_str(&format!("delete {path} ERROR: {e}\n")),
+            }
+        }
+
+        // Read-only inspection: return file contents and search matches.
+        for path in &blocks.reads {
+            actions.push(format!("👀 읽기: {path}"));
+            match resolve(&root, path).and_then(|p| std::fs::read_to_string(p).map_err(|e| e.to_string())) {
+                Ok(c) => feedback.push_str(&format!("--- {path} ---\n{}\n\n", truncate_str(&c, 6000))),
+                Err(e) => feedback.push_str(&format!("read {path} ERROR: {e}\n")),
+            }
+        }
+        for q in &blocks.searches {
+            actions.push(format!("🔍 검색: {q}"));
+            let r = search_workspace(&root, q);
+            feedback.push_str(&format!("search '{q}':\n{r}\n\n"));
+        }
+
+        for (path, contents) in &blocks.files {
             match resolve(&root, path) {
                 Ok(full) => {
                     if let Some(parent) = full.parent() {
@@ -822,7 +990,7 @@ async fn agent_chat(
         let mut any_fail = false;
         let mut run_sig = String::new();
         let mut last_output = String::new();
-        for cmd in &runs {
+        for cmd in &blocks.runs {
             actions.push(format!("⚙️ 실행: {cmd}"));
             let out = run_shell(&root, cmd, Duration::from_secs(240));
             if !out.contains("exit code: 0") {
@@ -873,10 +1041,10 @@ async fn agent_chat(
                  compile errors, edit the file to fix them. Do NOT repeat the same command \
                  unchanged.",
             );
-        } else if runs.is_empty() {
+        } else if blocks.runs.is_empty() {
             feedback.push_str(
-                "Files applied. Build/run to verify, or reply with a one-line summary and \
-                 no code blocks if the task is complete.",
+                "Done. Build/run to verify if you wrote code, or reply with a one-line summary \
+                 and no code blocks if the task is complete.",
             );
         }
 
@@ -976,17 +1144,27 @@ mod tests {
     #[test]
     fn parses_file_and_run_blocks() {
         let t = "Sure:\n```file:src/main.cpp\nint main(){return 0;}\n```\nNow build:\n```run\ncl /EHsc src/main.cpp\n```";
-        let (files, runs) = parse_blocks(t);
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].0, "src/main.cpp");
-        assert!(files[0].1.contains("int main"));
-        assert_eq!(runs, vec!["cl /EHsc src/main.cpp".to_string()]);
+        let b = parse_blocks(t);
+        assert_eq!(b.files.len(), 1);
+        assert_eq!(b.files[0].0, "src/main.cpp");
+        assert!(b.files[0].1.contains("int main"));
+        assert_eq!(b.runs, vec!["cl /EHsc src/main.cpp".to_string()]);
+    }
+
+    #[test]
+    fn parses_read_search_delete_blocks() {
+        let b = parse_blocks("Look:\n```read:src/lib.rs\n```\n```search:TODO\n```\n```delete:src\n```");
+        assert_eq!(b.reads, vec!["src/lib.rs".to_string()]);
+        assert_eq!(b.searches, vec!["TODO".to_string()]);
+        assert_eq!(b.deletes, vec!["src".to_string()]);
+        assert!(b.files.is_empty() && b.runs.is_empty());
+        assert!(!b.is_empty());
     }
 
     #[test]
     fn no_blocks_means_done() {
-        let (files, runs) = parse_blocks("All done. The build succeeded.");
-        assert!(files.is_empty() && runs.is_empty());
+        let b = parse_blocks("All done. The build succeeded.");
+        assert!(b.is_empty());
     }
 
     #[test]
@@ -995,7 +1173,7 @@ mod tests {
         assert!(!AGENT_SYSTEM.contains("\\n"), "system prompt has literal backslash-n");
         assert!(AGENT_SYSTEM.contains("```run\ncl /EHsc main.cpp\n```"));
         // The example must itself parse as a valid run block.
-        let (_files, runs) = parse_blocks(AGENT_SYSTEM);
-        assert!(runs.iter().any(|c| c == "cl /EHsc main.cpp"));
+        let b = parse_blocks(AGENT_SYSTEM);
+        assert!(b.runs.iter().any(|c| c == "cl /EHsc main.cpp"));
     }
 }
